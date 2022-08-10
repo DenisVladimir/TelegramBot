@@ -4,6 +4,9 @@ import time
 import requests
 import telegram
 from dotenv import load_dotenv
+import sys
+from custom_exceptions import NotHTTPSt, ErrorConnection
+
 load_dotenv()
 
 PRACTICUM_TOKEN = os.getenv('PRACTICUM_TOKEN')
@@ -24,7 +27,11 @@ HOMEWORK_STATUSES = {
 
 def send_message(bot, message):
     """Функция отправки сообщений в телеграмм."""
-    return bot.send_message(TELEGRAM_CHAT_ID, message)
+    logging.info('Бот отправляет сообщение в Телеграм')
+    try:
+        return bot.send_message(TELEGRAM_CHAT_ID, message)
+    except Exception as error:
+        logging.error(f'Ошибка отправки сообщения в Телеграмм {error}')
 
 
 def log_send_err_message(exception, err_description):
@@ -43,19 +50,21 @@ def get_api_answer(current_timestamp):
     timestamp = current_timestamp or int(time.time())
     params = {'from_date': timestamp}
     hw_valid_json = dict()
+    request_input_parameters = {
+        'url': ENDPOINT,
+        'headers': HEADERS,
+        'params': params
+    }
     try:
-        response = requests.get(
-            ENDPOINT,
-            headers=HEADERS,
-            params=params
-        )
+        response = requests.get(**request_input_parameters)
         if response.status_code != requests.codes.ok:
-            message = 'Сервер домашки не вернул статус 200.'
-            log_send_err_message('Not HTTPStstus.OK', message)
-            return {}
+            message = 'Сервер не вернул статус 200. Повторите запрос'
+            log_send_err_message('NotHTTPSt', message)
+            raise NotHTTPSt(message)
     except requests.ConnectionError as e:
-        message = 'Ошибка соединения.'
+        message = 'Ошибка соединения с сервиром Яндекс-практикум'
         log_send_err_message(e, message)
+        raise ErrorConnection(message)
     except requests.Timeout as e:
         message = 'Ошибка  Timeout-a.'
         log_send_err_message(e, message)
@@ -86,10 +95,10 @@ def parse_status(homework):
     homework_status = homework.get('status')
     if homework_status is None:
         raise KeyError('Отсутствует ключ "status"')
-    if homework_status in HOMEWORK_STATUSES:
+    if HOMEWORK_STATUSES.get(homework_status):
         verdict = HOMEWORK_STATUSES[homework_status]
         return (
-            f'Изменился статус проверки работы '
+            'Изменился статус проверки работы '
             f'"{homework_name}". {verdict}'
         )
     raise KeyError(f'Нет такого статуса - {homework_status} в списке')
@@ -97,46 +106,43 @@ def parse_status(homework):
 
 def check_tokens():
     """Функция проверки всех необходимых переменных."""
-    if PRACTICUM_TOKEN and TELEGRAM_CHAT_ID and TELEGRAM_TOKEN:
-        return True
-    return False
+    return all([PRACTICUM_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_TOKEN])
 
 
 def main():
     """Основная логика работы бота."""
-    check_tokens()
+    logging.info('Старт Бота')
+    if not check_tokens():
+        log_send_err_message(
+            'NO VARIABLES',
+            'Не найдены необходимые переменные для работы программы'
+        )
+        sys.exit(1)
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
-    current_timestamp = int(time.time())  # int(time.time()) - (10 *86400)
+    current_timestamp = int(time.time())
     old_status_message = None  # Статус работы в придыдущем запросе
     while True:
         try:
-            print('Bot work')
             response = get_api_answer(current_timestamp)
             last_homeworks = check_response(response)
-            if isinstance(last_homeworks, list) and last_homeworks:
-                status_message = parse_status(
-                    last_homeworks[0]
-                )
-                if (
-                    old_status_message or status_message == old_status_message
-                ):
-                    old_status_message = status_message
-                    print(f'статус не изменился: {status_message}')
-                else:
-                    print('отпрвка смс пользователя')
-                    logging.info('Бот отправляет сообщение в Телеграм')
-                    try:
-                        send_message(bot, status_message)
-                    except Exception as error:
-                        logging.critical(
-                            f'Ошибка отправки сообщения в телеграмм {error}'
-                        )
+            status_message = parse_status(
+                last_homeworks[0]
+            )
+            if (
+                old_status_message or status_message == old_status_message
+            ):
+                old_status_message = status_message
             else:
-                message = ''
-                log_send_err_message('')
+                try:
+                    send_message(bot, status_message)
+                except Exception as error:
+                    logging.critical(
+                        f'Ошибка отправки сообщения в телеграмм {error}'
+                    )
             time.sleep(RETRY_TIME)
         except Exception as error:
-            message = f'Сбой в работе программы: {error}'
+            message = 'Сбой в работе программы:'
+            log_send_err_message(message, error)
             send_message(bot, message)
             time.sleep(RETRY_TIME)
 
