@@ -18,7 +18,7 @@ ENDPOINT = 'https://practicum.yandex.ru/api/user_api/homework_statuses/'
 HEADERS = {'Authorization': f'OAuth {PRACTICUM_TOKEN}'}
 
 
-HOMEWORK_STATUSES = {
+HOMEWORK_VERDICT = {
     'approved': 'Работа проверена: ревьюеру всё понравилось. Ура!',
     'reviewing': 'Работа взята на проверку ревьюером.',
     'rejected': 'Работа проверена: у ревьюера есть замечания.'
@@ -27,11 +27,12 @@ HOMEWORK_STATUSES = {
 
 def send_message(bot, message):
     """Функция отправки сообщений в телеграмм."""
-    logging.info('Бот отправляет сообщение в Телеграм')
     try:
         return bot.send_message(TELEGRAM_CHAT_ID, message)
     except Exception as error:
         logging.error(f'Ошибка отправки сообщения в Телеграмм {error}')
+    else:
+        logging.info('Бот отправляет сообщение в Телеграм')
 
 
 def log_send_err_message(exception, err_description):
@@ -59,18 +60,13 @@ def get_api_answer(current_timestamp):
         response = requests.get(**request_input_parameters)
         if response.status_code != requests.codes.ok:
             message = 'Сервер не вернул статус 200. Повторите запрос'
-            log_send_err_message('NotHTTPSt', message)
             raise NotHTTPSt(message)
     except requests.ConnectionError as e:
         message = 'Ошибка соединения с сервиром Яндекс-практикум'
-        log_send_err_message(e, message)
-        raise ErrorConnection(message)
+        raise ErrorConnection(e, message)
     except requests.Timeout as e:
         message = 'Ошибка  Timeout-a.'
-        log_send_err_message(e, message)
-    except requests.RequestException as e:
-        message = 'Ошибка отправки запроса.'
-        log_send_err_message(e, message)
+        raise TimeoutError(e, message)
     else:
         hw_valid_json = response.json()
         return hw_valid_json
@@ -95,8 +91,8 @@ def parse_status(homework):
     homework_status = homework.get('status')
     if homework_status is None:
         raise KeyError('Отсутствует ключ "status"')
-    if HOMEWORK_STATUSES.get(homework_status):
-        verdict = HOMEWORK_STATUSES[homework_status]
+    verdict = HOMEWORK_VERDICT.get(homework_status)
+    if verdict:
         return (
             'Изменился статус проверки работы '
             f'"{homework_name}". {verdict}'
@@ -117,7 +113,11 @@ def main():
             'NO VARIABLES',
             'Не найдены необходимые переменные для работы программы'
         )
-        sys.exit(1)
+        sys.exit(
+            'Значение переменны',
+            '(PRACTICUM_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_TOKEN)',
+            'или одна из них не обнаружены'
+        )
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
     current_timestamp = int(time.time())
     old_status_message = None  # Статус работы в придыдущем запросе
